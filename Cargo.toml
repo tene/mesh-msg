@@ -1,0 +1,10 @@
+[package]
+name = "mesh-msg"
+version = "0.1.0"
+authors = ["Stephen Weeks <tene@allalone.org>"]
+edition = "2018"
+
+[dependencies]
+mio = "0.6.16"
+failure = "0.1.5"
+slab = "0.4.2"
