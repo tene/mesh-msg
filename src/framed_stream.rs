@@ -52,7 +52,7 @@ impl Stream {
 
 enum FrameState {
     NewFrame,
-    Pending(usize),
+    InProgress { size: usize, pending: usize },
 }
 
 impl FrameState {
@@ -96,18 +96,30 @@ impl FramedStream {
         }
     }
     pub fn handle_read(&mut self, poll: &mut Poll) -> IOResult<()> {
-        let read_count = self.stream.try_read_buf(&mut self.read_buf);
-        match self.read_state {
-            FrameState::NewFrame => {
-                let pending = self.read_buf.split_to(2).freeze().into_buf().get_u16_le();
-                self.read_state = FrameState::Pending(pending as usize);
-            }
-            FrameState::Pending(pending) => {
-                if pending > self.read_buf.capacity() {
-                    self.read_buf.reserve(pending);
+        while let Some(mut read_count) = self.stream.try_read_buf(&mut self.read_buf)? {
+            loop {
+                match self.read_state {
+                    FrameState::NewFrame => {
+                        let size =
+                            self.read_buf.split_to(2).freeze().into_buf().get_u16_le() as usize;
+                        read_count -= 2;
+                        if size >= read_count {
+                            let pending = size - read_count;
+                            self.read_state = FrameState::InProgress { size, pending };
+                            if pending > self.read_buf.capacity() {
+                                self.read_buf.reserve(pending);
+                            }
+                            break;
+                        } else {
+                            self.read_state = FrameState::InProgress { size, pending: 0 };
+                            continue;
+                            // XXX TODO what to do with read_count here?  This is a mess.
+                        }
+                    }
+                    FrameState::InProgress { size, pending } => {}
                 }
             }
-        };
+        }
         unimplemented!()
     }
     pub fn handle_write(&mut self, poll: &mut Poll) -> IOResult<()> {
