@@ -1,3 +1,5 @@
+pub mod framed_stream;
+
 #[cfg(test)]
 mod tests {
     #[test]

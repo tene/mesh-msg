@@ -5,8 +5,12 @@ use slab::Slab;
 
 use failure::Error;
 
+use bytes::{Buf, BufMut, Bytes, BytesMut};
+
 use std::io::Result as IOResult;
 use std::io::{Read, Write};
+
+use mesh_msg::framed_stream::FramedStream;
 
 enum Conn {
     Listen(TcpListener),
@@ -57,45 +61,6 @@ impl Conn {
     }
 }
 
-trait Stream: Read + Write + Evented {}
-impl<T> Stream for T where T: Read + Write + Evented {}
-
-struct FramedStream {
-    stream: Box<Stream>,
-}
-
-impl Evented for FramedStream {
-    fn register(&self, poll: &Poll, token: Token, interest: Ready, opts: PollOpt) -> IOResult<()> {
-        self.stream.register(poll, token, interest, opts)
-    }
-    fn reregister(
-        &self,
-        poll: &Poll,
-        token: Token,
-        interest: Ready,
-        opts: PollOpt,
-    ) -> IOResult<()> {
-        self.stream.reregister(poll, token, interest, opts)
-    }
-    fn deregister(&self, poll: &Poll) -> IOResult<()> {
-        self.stream.deregister(poll)
-    }
-}
-
-impl FramedStream {
-    pub fn new<S: Stream + 'static>(stream: S) -> Self {
-        FramedStream {
-            stream: Box::new(stream),
-        }
-    }
-    pub fn handle_read(&mut self) -> IOResult<()> {
-        unimplemented!()
-    }
-    pub fn handle_write(&mut self) -> IOResult<()> {
-        unimplemented!()
-    }
-}
-
 fn main() -> Result<(), Error> {
     let mut slab: Slab<Conn> = Slab::new();
 
@@ -128,10 +93,10 @@ fn main() -> Result<(), Error> {
                 },
                 Some(Conn::Stream(stream)) => {
                     if event.readiness().is_readable() {
-                        stream.handle_read();
+                        stream.handle_read(&mut poll);
                     }
                     if event.readiness().is_writable() {
-                        stream.handle_write();
+                        stream.handle_write(&mut poll);
                     }
                 }
                 _ => unreachable!(),

@@ -2,7 +2,7 @@ use mio::{Evented, Poll, PollOpt, Ready, Token};
 
 use failure::Error;
 
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut, IntoBuf};
 
 use std::io::Result as IOResult;
 use std::io::{Read, Write};
@@ -97,6 +97,17 @@ impl FramedStream {
     }
     pub fn handle_read(&mut self, poll: &mut Poll) -> IOResult<()> {
         let read_count = self.stream.try_read_buf(&mut self.read_buf);
+        match self.read_state {
+            FrameState::NewFrame => {
+                let pending = self.read_buf.split_to(2).freeze().into_buf().get_u16_le();
+                self.read_state = FrameState::Pending(pending as usize);
+            }
+            FrameState::Pending(pending) => {
+                if pending > self.read_buf.capacity() {
+                    self.read_buf.reserve(pending);
+                }
+            }
+        };
         unimplemented!()
     }
     pub fn handle_write(&mut self, poll: &mut Poll) -> IOResult<()> {
