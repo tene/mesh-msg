@@ -1,12 +1,9 @@
 use mio::{Evented, Poll, PollOpt, Ready, Token};
 
-use failure::Error;
+use bytes::{BufMut, Bytes, BytesMut};
 
-use bytes::{Buf, BufMut, Bytes, BytesMut, IntoBuf};
-
-use std::fmt::Debug;
 use std::io::Result as IOResult;
-use std::io::{Read, Write};
+use std::io::{Error, ErrorKind, Read, Write};
 
 #[derive(Debug)]
 pub struct Frame {
@@ -20,8 +17,8 @@ impl Frame {
     }
 }
 
-pub trait Stream: Read + Write + Evented + Debug {}
-impl<T> Stream for T where T: Read + Write + Evented + Debug {}
+pub trait Stream: Read + Write + Evented {}
+impl<T> Stream for T where T: Read + Write + Evented {}
 
 impl Stream {
     pub fn read_buf<B: BufMut>(&mut self, buf: &mut B) -> IOResult<usize> {
@@ -43,50 +40,6 @@ impl Stream {
                     Err(err)
                 }
             }
-        }
-    }
-
-    pub fn try_read_frame(&mut self, buf: &mut BytesMut) -> IOResult<Option<Frame>> {
-        // When we receive multiple frames per read,
-        // process them all before reading again
-        let should_read = if buf.is_empty() || buf.len() < 2 {
-            if buf.capacity() < 1024 {
-                buf.reserve(4096);
-            }
-            true
-        } else {
-            let msg_size = u16::from_le_bytes([buf[0], buf[1]]) as usize;
-            let buf_msg_len = buf.len() - 2;
-            if msg_size <= buf_msg_len {
-                false
-            } else {
-                if msg_size > buf_msg_len + buf.capacity() {
-                    buf.reserve(msg_size - buf_msg_len);
-                }
-                true
-            }
-        };
-        if should_read {
-            let read_bytes = self.read_buf(buf)?;
-            if read_bytes == 0 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "Connection Closed",
-                ));
-            }
-            if read_bytes < 2 {
-                return Ok(None);
-            }
-        };
-        let msg_size = u16::from_le_bytes([buf[0], buf[1]]) as usize;
-        let buf_msg_len = buf.len() - 2;
-        if msg_size <= buf_msg_len {
-            buf.advance(2);
-            let frame_buf = buf.split_to(msg_size).freeze();
-            let frame = Frame::new(msg_size, frame_buf);
-            Ok(Some(frame))
-        } else {
-            Ok(None)
         }
     }
 
@@ -135,24 +88,58 @@ impl FramedStream {
             read_buf: BytesMut::with_capacity(8192),
         }
     }
-    pub fn handle_read(&mut self, poll: &mut Poll) -> (Vec<Frame>, IOResult<()>) {
-        let mut frames = vec![];
-        loop {
-            match self.stream.try_read_frame(&mut self.read_buf) {
-                Ok(Some(frame)) => {
-                    frames.push(frame);
-                }
-                Ok(None) => {
-                    continue;
-                }
-                Err(err) => match err.kind() {
-                    std::io::ErrorKind::WouldBlock => return (frames, Ok(())),
-                    _ => return (frames, Err(err)),
-                },
+    fn ensure_read_buf_capacity(&mut self) {
+        let buf = &mut self.read_buf;
+        let buf_len = buf.len();
+        let buf_capacity = buf.capacity();
+        if buf.len() > 2 {
+            let msg_size = u16::from_le_bytes([buf[0], buf[1]]) as usize;
+            let buf_msg_len = buf_len - 2;
+            if msg_size > buf_msg_len + buf_capacity {
+                buf.reserve(msg_size - buf_msg_len);
             }
+        } else if buf_capacity < 1024 {
+            buf.reserve(4096);
         }
     }
-    pub fn handle_write(&mut self, poll: &mut Poll) -> IOResult<()> {
+    pub fn read_frames(&mut self, _poll: &mut Poll) -> (Vec<Frame>, Option<Error>) {
+        let mut frames: Vec<Frame> = vec![];
+        let mut err: Option<Error> = None;
+        'outer: loop {
+            self.ensure_read_buf_capacity();
+            let buf = &mut self.read_buf;
+            match self.stream.read_buf(buf) {
+                Ok(0) => {
+                    err = Some(Error::new(ErrorKind::UnexpectedEof, "Connection Closed"));
+                    break 'outer;
+                }
+                Err(e) => {
+                    if e.kind() != ErrorKind::WouldBlock {
+                        err = Some(e);
+                    }
+                    break 'outer;
+                }
+                Ok(_n) => {
+                    // Successful read
+                }
+            }
+            'inner: while buf.len() > 2 {
+                let msg_size = u16::from_le_bytes([buf[0], buf[1]]) as usize;
+                let buf_msg_len = buf.len() - 2;
+                if msg_size <= buf_msg_len {
+                    buf.advance(2);
+                    let frame_buf = buf.split_to(msg_size).freeze();
+                    let frame = Frame::new(msg_size, frame_buf);
+                    frames.push(frame);
+                } else {
+                    break 'inner;
+                }
+            }
+        }
+        return (frames, err);
+    }
+
+    pub fn handle_write(&mut self, _poll: &mut Poll) -> IOResult<()> {
         unimplemented!()
     }
 }

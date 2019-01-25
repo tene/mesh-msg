@@ -1,14 +1,11 @@
-use mio::net::{TcpListener, TcpStream};
+use mio::net::TcpListener;
 use mio::{Evented, Events, Poll, PollOpt, Ready, Token};
 
 use slab::Slab;
 
 use failure::Error;
 
-use bytes::{Buf, BufMut, Bytes, BytesMut};
-
 use std::io::Result as IOResult;
-use std::io::{Read, Write};
 
 use mesh_msg::framed_stream::FramedStream;
 
@@ -98,9 +95,9 @@ fn main() -> Result<(), Error> {
                 Some(Conn::Stream(stream)) => {
                     let mut retain = true;
                     if event.readiness().is_readable() {
-                        let (frames, rv) = stream.handle_read(&mut poll);
+                        let (frames, rv) = stream.read_frames(&mut poll);
                         dbg!(frames);
-                        if let Err(_err) = rv {
+                        if let Some(_err) = rv {
                             retain = false;
                         };
                     }
