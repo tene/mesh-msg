@@ -7,6 +7,18 @@ use bytes::{Buf, BufMut, Bytes, BytesMut, IntoBuf};
 use std::io::Result as IOResult;
 use std::io::{Read, Write};
 
+#[derive(Debug)]
+pub struct Frame {
+    pub len: usize,
+    pub buf: Bytes,
+}
+
+impl Frame {
+    pub fn new(len: usize, buf: Bytes) -> Self {
+        Self { len, buf }
+    }
+}
+
 pub trait Stream: Read + Write + Evented {}
 impl<T> Stream for T where T: Read + Write + Evented {}
 
@@ -35,6 +47,38 @@ impl Stream {
         }
     }
 
+    pub fn try_read_frame(&mut self, buf: &mut BytesMut) -> IOResult<Option<Frame>> {
+        // When we receive multiple frames per read,
+        // process them all before reading again
+        let should_read = if buf.is_empty() || buf.len() < 2 {
+            true
+        } else {
+            let msg_size = u16::from_le_bytes([buf[0], buf[1]]) as usize;
+            let buf_msg_len = buf.len() - 2;
+            if msg_size < buf_msg_len {
+                false
+            } else {
+                if msg_size > buf_msg_len + buf.capacity() {
+                    buf.reserve(msg_size - buf_msg_len);
+                }
+                true
+            }
+        };
+        if should_read {
+            let _read_count = self.read(buf)?;
+        };
+        let msg_size = u16::from_le_bytes([buf[0], buf[1]]) as usize;
+        let buf_msg_len = buf.len() - 2;
+        if msg_size <= buf_msg_len {
+            buf.advance(2);
+            let frame_buf = buf.split_to(msg_size).freeze();
+            let frame = Frame::new(msg_size, frame_buf);
+            Ok(Some(frame))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn try_write(&mut self, buf: &[u8]) -> IOResult<Option<usize>> {
         use std::io::ErrorKind::WouldBlock;
         match self.write(buf) {
@@ -50,21 +94,8 @@ impl Stream {
     }
 }
 
-enum FrameState {
-    NewFrame,
-    InProgress { size: usize, pending: usize },
-}
-
-impl FrameState {
-    pub fn new() -> Self {
-        FrameState::NewFrame
-    }
-}
-
 pub struct FramedStream {
     stream: Box<Stream>,
-    read_state: FrameState,
-    write_state: FrameState,
     read_buf: BytesMut,
 }
 
@@ -90,34 +121,22 @@ impl FramedStream {
     pub fn new<S: Stream + 'static>(stream: S) -> Self {
         FramedStream {
             stream: Box::new(stream),
-            read_state: FrameState::new(),
-            write_state: FrameState::new(),
             read_buf: BytesMut::with_capacity(8192),
         }
     }
     pub fn handle_read(&mut self, poll: &mut Poll) -> IOResult<()> {
-        while let Some(mut read_count) = self.stream.try_read_buf(&mut self.read_buf)? {
-            loop {
-                match self.read_state {
-                    FrameState::NewFrame => {
-                        let size =
-                            self.read_buf.split_to(2).freeze().into_buf().get_u16_le() as usize;
-                        read_count -= 2;
-                        if size >= read_count {
-                            let pending = size - read_count;
-                            self.read_state = FrameState::InProgress { size, pending };
-                            if pending > self.read_buf.capacity() {
-                                self.read_buf.reserve(pending);
-                            }
-                            break;
-                        } else {
-                            self.read_state = FrameState::InProgress { size, pending: 0 };
-                            continue;
-                            // XXX TODO what to do with read_count here?  This is a mess.
-                        }
-                    }
-                    FrameState::InProgress { size, pending } => {}
+        loop {
+            match self.stream.try_read_frame(&mut self.read_buf) {
+                Ok(Some(frame)) => {
+                    dbg!(frame);
                 }
+                Ok(None) => {
+                    continue;
+                }
+                Err(err) => match err.kind() {
+                    WouldBlock => return Ok(()),
+                    _ => return Err(err),
+                },
             }
         }
         unimplemented!()
