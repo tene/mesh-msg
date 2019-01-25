@@ -82,24 +82,42 @@ fn main() -> Result<(), Error> {
 
         for event in events.iter() {
             let Token(idx) = event.token();
-            match slab.get_mut(idx) {
+            let retain: bool = match slab.get_mut(idx) {
                 Some(Conn::Listen(server)) => match server.accept() {
                     Ok((stream, _client_addr)) => {
                         Conn::Stream(FramedStream::new(stream))
                             .register_and_save(&mut poll, &mut slab)
                             .expect("Register Stream");
+                        true
                     }
-                    Err(e) => eprintln!("Error when accepting connection: {}", e),
+                    Err(e) => {
+                        eprintln!("Error when accepting connection: {}", e);
+                        false
+                    }
                 },
                 Some(Conn::Stream(stream)) => {
+                    let mut retain = true;
                     if event.readiness().is_readable() {
-                        stream.handle_read(&mut poll);
+                        let (frames, rv) = stream.handle_read(&mut poll);
+                        dbg!(frames);
+                        if let Err(_err) = rv {
+                            retain = false;
+                        };
                     }
                     if event.readiness().is_writable() {
-                        stream.handle_write(&mut poll);
+                        match stream.handle_write(&mut poll) {
+                            Ok(()) => {}
+                            Err(_err) => {
+                                retain = false;
+                            }
+                        }
                     }
+                    retain
                 }
                 _ => unreachable!(),
+            };
+            if !retain {
+                slab.remove(idx);
             }
         }
     }
