@@ -17,6 +17,7 @@ enum ControlMsg {
     Connect,
     Listen,
     Write,
+    Close,
 }
 
 enum Socket {
@@ -140,11 +141,17 @@ impl Core {
                 // Should return error
             }
             Some(Socket::Stream(stream)) => {
+                let pre = stream.interest();
                 // Should return error
                 let _ = stream.queue_write(buf);
-                let _ =
-                    self.poll
-                        .reregister(stream, Token(idx), stream.interest(), PollOpt::edge());
+                if pre != stream.interest() {
+                    let _ = self.poll.reregister(
+                        stream,
+                        Token(idx),
+                        stream.interest(),
+                        PollOpt::edge(),
+                    );
+                }
             }
             Some(Socket::Control(_)) => {
                 // Should return error
@@ -153,6 +160,10 @@ impl Core {
                 // Should return error
             }
         }
+    }
+
+    pub fn close(&mut self, idx: usize) {
+        unimplemented!()
     }
 
     // XXX TODO This should receive a buffer to write into
@@ -194,18 +205,21 @@ impl Core {
                         };
                     }
                     if event.readiness().is_writable() {
+                        let pre = stream.interest();
                         match stream.handle_write() {
                             Ok(()) => {}
                             Err(_err) => {
                                 retain = false;
                             }
                         }
-                        let _ = self.poll.reregister(
-                            stream,
-                            Token(idx),
-                            stream.interest(),
-                            PollOpt::edge(),
-                        );
+                        if pre != stream.interest() {
+                            let _ = self.poll.reregister(
+                                stream,
+                                Token(idx),
+                                stream.interest(),
+                                PollOpt::edge(),
+                            );
+                        }
                     }
                     retain
                 }
@@ -217,5 +231,33 @@ impl Core {
             }
         }
         Ok(self.frame_events.split_off(0))
+    }
+
+    pub fn sockets(&self) {
+        unimplemented!()
+    }
+
+    pub fn control_channel(&self) -> CoreControl {
+        let sender = self.control_tx.clone();
+        CoreControl { sender }
+    }
+}
+
+pub struct CoreControl {
+    sender: Sender<ControlMsg>,
+}
+
+impl CoreControl {
+    pub fn listen(&self) {
+        unimplemented!()
+    }
+    pub fn connect(&self) {
+        unimplemented!()
+    }
+    pub fn write_frame(&self) {
+        unimplemented!()
+    }
+    pub fn close(&self) {
+        unimplemented!()
     }
 }
