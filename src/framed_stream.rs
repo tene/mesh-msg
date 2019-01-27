@@ -1,6 +1,6 @@
 use mio::{Evented, Poll, PollOpt, Ready, Token};
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use std::io::Result as IOResult;
 use std::io::{Error, ErrorKind, Read, Write};
@@ -61,6 +61,8 @@ impl Stream {
 pub struct FramedStream {
     stream: Box<Stream>,
     read_buf: BytesMut,
+    write_buf: Option<Box<Buf>>,
+    interest: Ready,
 }
 
 impl Evented for FramedStream {
@@ -83,9 +85,15 @@ impl Evented for FramedStream {
 
 impl FramedStream {
     pub fn new<S: Stream + 'static>(stream: S) -> Self {
+        let interest = Ready::readable();
+        let write_buf = None;
+        let stream = Box::new(stream);
+        let read_buf = BytesMut::with_capacity(8192);
         FramedStream {
-            stream: Box::new(stream),
-            read_buf: BytesMut::with_capacity(8192),
+            stream,
+            read_buf,
+            write_buf,
+            interest,
         }
     }
     fn ensure_read_buf_capacity(&mut self) {
@@ -102,7 +110,7 @@ impl FramedStream {
             buf.reserve(4096);
         }
     }
-    pub fn read_frames(&mut self, _poll: &mut Poll) -> (Vec<Frame>, Option<Error>) {
+    pub fn read_frames(&mut self) -> (Vec<Frame>, Option<Error>) {
         let mut frames: Vec<Frame> = vec![];
         let mut err: Option<Error> = None;
         'outer: loop {
@@ -139,7 +147,17 @@ impl FramedStream {
         return (frames, err);
     }
 
-    pub fn handle_write(&mut self, _poll: &mut Poll) -> IOResult<()> {
+    pub fn queue_write<B: Buf + 'static>(&mut self, buf: B) {
+        self.write_buf = match self.write_buf.take() {
+            Some(pending) => Some(Box::new(pending.chain(buf))),
+            None => {
+                self.interest.insert(Ready::writable());
+                Some(Box::new(buf))
+            }
+        };
+    }
+
+    pub fn handle_write(&mut self) -> IOResult<()> {
         unimplemented!()
     }
 }

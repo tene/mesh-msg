@@ -1,4 +1,8 @@
-pub mod framed_stream;
+mod core;
+mod framed_stream;
+
+pub use crate::core::Core;
+pub use crate::framed_stream::{Frame, FramedStream};
 
 #[cfg(test)]
 mod tests {
