@@ -10,7 +10,7 @@ fn main() -> Result<(), Error> {
     core.write_frame(idx, "World".into_buf());
 
     loop {
-        let frame_events = core.poll()?;
+        let frame_events = core.poll(None)?;
         dbg!(frame_events);
     }
 }

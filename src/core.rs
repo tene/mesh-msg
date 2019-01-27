@@ -1,5 +1,6 @@
 use mio::net::{TcpListener, TcpStream};
 use mio::{Evented, Events, Poll, PollOpt, Ready, Token};
+use mio_extras::channel::{channel, Receiver, Sender};
 
 use bytes::Buf;
 use slab::Slab;
@@ -8,12 +9,20 @@ use failure::Error;
 
 use std::io;
 use std::io::Result as IOResult;
+use std::time::Duration;
 
 use crate::{Frame, FramedStream};
+
+enum ControlMsg {
+    Connect,
+    Listen,
+    Write,
+}
 
 enum Socket {
     Listen(TcpListener),
     Stream(FramedStream),
+    Control(Receiver<ControlMsg>),
 }
 
 impl Evented for Socket {
@@ -22,6 +31,7 @@ impl Evented for Socket {
         match self {
             Listen(conn) => conn.register(poll, token, interest, opts),
             Stream(conn) => conn.register(poll, token, interest, opts),
+            Control(conn) => conn.register(poll, token, interest, opts),
         }
     }
     fn reregister(
@@ -35,6 +45,7 @@ impl Evented for Socket {
         match self {
             Listen(conn) => conn.reregister(poll, token, interest, opts),
             Stream(conn) => conn.reregister(poll, token, interest, opts),
+            Control(conn) => conn.reregister(poll, token, interest, opts),
         }
     }
     fn deregister(&self, poll: &Poll) -> IOResult<()> {
@@ -42,6 +53,7 @@ impl Evented for Socket {
         match self {
             Listen(conn) => conn.deregister(poll),
             Stream(conn) => conn.deregister(poll),
+            Control(conn) => conn.deregister(poll),
         }
     }
 }
@@ -86,12 +98,15 @@ pub struct Core {
     poll: Poll,
     events: Events,
     frame_events: Vec<FrameEvent>,
+    control_tx: Sender<ControlMsg>,
 }
 
 impl Core {
     pub fn new() -> Self {
-        let slab: Slab<Socket> = Slab::new();
-        let poll = Poll::new().unwrap();
+        let mut slab: Slab<Socket> = Slab::new();
+        let mut poll = Poll::new().unwrap();
+        let (control_tx, control_rx) = channel();
+        let _ = Socket::Control(control_rx).register_and_save(&mut poll, &mut slab);
         let events = Events::with_capacity(1024);
         let frame_events = vec![];
         Self {
@@ -99,6 +114,7 @@ impl Core {
             poll,
             events,
             frame_events,
+            control_tx,
         }
     }
 
@@ -130,6 +146,9 @@ impl Core {
                     self.poll
                         .reregister(stream, Token(idx), stream.interest(), PollOpt::edge());
             }
+            Some(Socket::Control(_)) => {
+                // Should return error
+            }
             None => {
                 // Should return error
             }
@@ -138,8 +157,8 @@ impl Core {
 
     // XXX TODO This should receive a buffer to write into
     // To avoid unnecessary allocations
-    pub fn poll(&mut self) -> IOResult<Vec<FrameEvent>> {
-        self.poll.poll(&mut self.events, None)?;
+    pub fn poll(&mut self, timeout: Option<Duration>) -> IOResult<Vec<FrameEvent>> {
+        self.poll.poll(&mut self.events, timeout)?;
         for event in self.events.iter() {
             let Token(idx) = event.token();
             let retain: bool = match self.slab.get_mut(idx) {
