@@ -1,6 +1,7 @@
 use mio::{Evented, Poll, PollOpt, Ready, Token};
 
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::buf::Chain;
+use bytes::{Buf, BufMut, Bytes, BytesMut, IntoBuf};
 
 use std::io::Result as IOResult;
 use std::io::{Error, ErrorKind, Read, Write};
@@ -62,6 +63,7 @@ pub struct FramedStream {
     stream: Box<Stream>,
     read_buf: BytesMut,
     write_buf: Option<Box<Buf>>,
+    size_buf: BytesMut,
     interest: Ready,
 }
 
@@ -89,12 +91,17 @@ impl FramedStream {
         let write_buf = None;
         let stream = Box::new(stream);
         let read_buf = BytesMut::with_capacity(8192);
+        let size_buf = BytesMut::with_capacity(8192);
         FramedStream {
             stream,
             read_buf,
             write_buf,
+            size_buf,
             interest,
         }
+    }
+    pub fn interest(&self) -> Ready {
+        self.interest
     }
     fn ensure_read_buf_capacity(&mut self) {
         let buf = &mut self.read_buf;
@@ -147,7 +154,17 @@ impl FramedStream {
         return (frames, err);
     }
 
-    pub fn queue_write<B: Buf + 'static>(&mut self, buf: B) {
+    pub fn queue_write<B: Buf + 'static>(&mut self, buf: B) -> IOResult<()> {
+        let msg_size = buf.remaining();
+        if msg_size > std::u16::MAX as usize {
+            return Err(Error::new(ErrorKind::InvalidData, "Message too big"));
+        }
+        self.size_buf.put_u16_le(msg_size as u16);
+
+        let msg_size_buf = self.size_buf.split_to(2).freeze().into_buf();
+
+        let buf = Chain::new(msg_size_buf, buf);
+
         self.write_buf = match self.write_buf.take() {
             Some(pending) => Some(Box::new(pending.chain(buf))),
             None => {
@@ -155,9 +172,47 @@ impl FramedStream {
                 Some(Box::new(buf))
             }
         };
+        Ok(())
     }
 
     pub fn handle_write(&mut self) -> IOResult<()> {
-        unimplemented!()
+        // XXX TODO use vectored writes?
+        // Not quite sure how to populate the array of iovecs
+        // https://docs.rs/mio/0.6.16/mio/net/struct.TcpStream.html#method.read_bufs
+        // https://docs.rs/bytes/0.4.11/bytes/trait.Buf.html#method.bytes_vec
+        match self.write_buf.take() {
+            None => {}
+            Some(buf) => {
+                let mut buf: Bytes = buf.collect();
+
+                loop {
+                    if buf.is_empty() {
+                        break;
+                    }
+                    match self.stream.write(&buf) {
+                        Ok(0) => {
+                            // XXX TODO When precisely will this happen?
+                            break;
+                        }
+                        Err(e) => {
+                            if e.kind() == ErrorKind::WouldBlock {
+                                break;
+                            }
+                            return Err(e);
+                        }
+                        Ok(n) => {
+                            buf.advance(n);
+                            // Successful read
+                        }
+                    }
+                }
+                if buf.is_empty() {
+                    self.interest.remove(Ready::writable());
+                } else {
+                    self.write_buf = Some(Box::new(buf.into_buf()));
+                }
+            }
+        }
+        Ok(())
     }
 }

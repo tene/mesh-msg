@@ -1,6 +1,7 @@
 use mio::net::{TcpListener, TcpStream};
 use mio::{Evented, Events, Poll, PollOpt, Ready, Token};
 
+use bytes::Buf;
 use slab::Slab;
 
 use failure::Error;
@@ -117,6 +118,24 @@ impl Core {
         Ok(id)
     }
 
+    pub fn write_frame<B: Buf + 'static>(&mut self, idx: usize, buf: B) {
+        match self.slab.get_mut(idx) {
+            Some(Socket::Listen(_)) => {
+                // Should return error
+            }
+            Some(Socket::Stream(stream)) => {
+                // Should return error
+                let _ = stream.queue_write(buf);
+                let _ =
+                    self.poll
+                        .reregister(stream, Token(idx), stream.interest(), PollOpt::edge());
+            }
+            None => {
+                // Should return error
+            }
+        }
+    }
+
     // XXX TODO This should receive a buffer to write into
     // To avoid unnecessary allocations
     pub fn poll(&mut self) -> IOResult<Vec<FrameEvent>> {
@@ -162,6 +181,12 @@ impl Core {
                                 retain = false;
                             }
                         }
+                        let _ = self.poll.reregister(
+                            stream,
+                            Token(idx),
+                            stream.interest(),
+                            PollOpt::edge(),
+                        );
                     }
                     retain
                 }
