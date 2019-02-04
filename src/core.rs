@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use crate::{Frame, FramedStream};
 
+#[derive(Debug)]
 enum ControlMsg {
     Connect,
     Listen,
@@ -222,6 +223,32 @@ impl Core {
                         }
                     }
                     retain
+                }
+                Some(Socket::Control(ctl)) => {
+                    loop {
+                        match ctl.try_recv() {
+                            Ok(msg) => {
+                                dbg!(msg);
+                                // XXX Do I really need to use a channel
+                                // XXX Can we just handle writes directly?
+                                // XXX The problem is dealing with the Poll
+                                // XXX Maybe just use the control socket to deliver new registrations for newly pending writes
+                                // XXX Maybe I can even optimistically try acquiring the poll
+                                // XXX So we don't need the message passing overhead when not needed
+                            }
+                            Err(e) => {
+                                use std::sync::mpsc::TryRecvError::*;
+                                match e {
+                                    Empty => break,
+                                    Disconnected => {
+                                        // Should probably do something here??
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    true
                 }
                 _ => unreachable!(),
             };
