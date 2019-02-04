@@ -2,15 +2,42 @@ use bytes::IntoBuf;
 use failure::Error;
 use mesh_msg::Core;
 
+use crossbeam::thread;
+use linefeed::{Interface, ReadResult};
+
+use std::sync::Arc;
+
 fn main() -> Result<(), Error> {
-    let mut core = Core::new();
-    let idx = core.connect("127.0.0.1:13265")?;
+    thread::scope(|s| {
+        let mut core = Core::new();
+        let idx = core.connect("127.0.0.1:13265").unwrap();
+        let mut write_handle = core.write_handle(idx);
 
-    core.write_frame(idx, "Hello".into_buf());
-    core.write_frame(idx, "World".into_buf());
+        write_handle.write_frame("Hello".into_buf());
+        write_handle.write_frame("World".into_buf());
 
-    loop {
-        let frame_events = core.poll(None)?;
-        dbg!(frame_events);
-    }
+        let reader = Arc::new(Interface::new("my-application").unwrap());
+
+        reader.set_prompt("my-app> ").unwrap();
+
+        let iface = reader.clone();
+        s.spawn(move |_| loop {
+            if let Ok(frame_events) = core.poll(None) {
+                if frame_events.len() > 0 {
+                    writeln!(iface, "{:?}", frame_events).unwrap();
+                }
+            }
+        });
+        while let ReadResult::Input(input) = reader.read_line().unwrap() {
+            write_handle.write_frame(input.into_buf());
+        }
+        // XXX TODO Need a way to close the core, to terminate the thread
+    })
+    .unwrap();
+
+    println!("Goodbye.");
+
+    /*
+     */
+    Ok(())
 }

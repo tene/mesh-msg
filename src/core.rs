@@ -13,12 +13,14 @@ use std::time::Duration;
 
 use crate::{Frame, FramedStream};
 
-#[derive(Debug)]
 enum ControlMsg {
+    WriteFrame(usize, Box<Buf + Send>),
+    /*
     Connect,
     Listen,
     Write,
     Close,
+    */
 }
 
 enum Socket {
@@ -136,23 +138,14 @@ impl Core {
         Ok(id)
     }
 
-    pub fn write_frame<B: Buf + 'static>(&mut self, idx: usize, buf: B) {
+    pub fn write_frame<B: Buf + Send + 'static>(&mut self, idx: usize, buf: B) {
         match self.slab.get_mut(idx) {
             Some(Socket::Listen(_)) => {
                 // Should return error
             }
             Some(Socket::Stream(stream)) => {
-                let pre = stream.interest();
                 // Should return error
-                let _ = stream.queue_write(buf);
-                if pre != stream.interest() {
-                    let _ = self.poll.reregister(
-                        stream,
-                        Token(idx),
-                        stream.interest(),
-                        PollOpt::edge(),
-                    );
-                }
+                let _ = stream.queue_write(buf, &mut self.poll, Token(idx));
             }
             Some(Socket::Control(_)) => {
                 // Should return error
@@ -163,7 +156,7 @@ impl Core {
         }
     }
 
-    pub fn close(&mut self, idx: usize) {
+    pub fn close(&mut self, _idx: usize) {
         unimplemented!()
     }
 
@@ -225,10 +218,12 @@ impl Core {
                     retain
                 }
                 Some(Socket::Control(ctl)) => {
+                    let mut messages = vec![];
                     loop {
                         match ctl.try_recv() {
                             Ok(msg) => {
-                                dbg!(msg);
+                                messages.push(msg);
+                                //dbg!(msg);
                                 // XXX Do I really need to use a channel
                                 // XXX Can we just handle writes directly?
                                 // XXX The problem is dealing with the Poll
@@ -244,6 +239,15 @@ impl Core {
                                         // Should probably do something here??
                                         break;
                                     }
+                                }
+                            }
+                        }
+                    }
+                    for msg in messages {
+                        match msg {
+                            ControlMsg::WriteFrame(idx, buf) => {
+                                if let Some(Socket::Stream(stream)) = self.slab.get_mut(idx) {
+                                    let _ = stream.queue_write(buf, &mut self.poll, Token(idx));
                                 }
                             }
                         }
@@ -264,27 +268,21 @@ impl Core {
         unimplemented!()
     }
 
-    pub fn control_channel(&self) -> CoreControl {
+    pub fn write_handle(&self, idx: usize) -> WriteHandle {
         let sender = self.control_tx.clone();
-        CoreControl { sender }
+        WriteHandle { idx, sender }
     }
 }
 
-pub struct CoreControl {
+pub struct WriteHandle {
+    idx: usize,
     sender: Sender<ControlMsg>,
 }
 
-impl CoreControl {
-    pub fn listen(&self) {
-        unimplemented!()
-    }
-    pub fn connect(&self) {
-        unimplemented!()
-    }
-    pub fn write_frame(&self) {
-        unimplemented!()
-    }
-    pub fn close(&self) {
-        unimplemented!()
+impl WriteHandle {
+    pub fn write_frame<B: Buf + Send + 'static>(&mut self, buf: B) {
+        self.sender
+            .send(ControlMsg::WriteFrame(self.idx, Box::new(buf)))
+            .unwrap();
     }
 }

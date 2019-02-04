@@ -18,8 +18,8 @@ impl Frame {
     }
 }
 
-pub trait Stream: Read + Write + Evented {}
-impl<T> Stream for T where T: Read + Write + Evented {}
+pub trait Stream: Read + Write + Evented + Send {}
+impl<T> Stream for T where T: Read + Write + Evented + Send {}
 
 impl Stream {
     pub fn read_buf<B: BufMut>(&mut self, buf: &mut B) -> IOResult<usize> {
@@ -62,7 +62,7 @@ impl Stream {
 pub struct FramedStream {
     stream: Box<Stream>,
     read_buf: BytesMut,
-    write_buf: Option<Box<Buf>>,
+    write_buf: Option<Box<Buf + Send>>,
     size_buf: BytesMut,
     interest: Ready,
 }
@@ -154,7 +154,13 @@ impl FramedStream {
         return (frames, err);
     }
 
-    pub fn queue_write<B: Buf + 'static>(&mut self, buf: B) -> IOResult<()> {
+    pub fn queue_write<B: Buf + Send + 'static>(
+        &mut self,
+        buf: B,
+        poll: &mut Poll,
+        token: Token,
+    ) -> IOResult<()> {
+        // XXX TODO Optimistically attempt writing immediately?
         let msg_size = buf.remaining();
         if msg_size > std::u16::MAX as usize {
             return Err(Error::new(ErrorKind::InvalidData, "Message too big"));
@@ -169,6 +175,7 @@ impl FramedStream {
             Some(pending) => Some(Box::new(pending.chain(buf))),
             None => {
                 self.interest.insert(Ready::writable());
+                poll.reregister(self, token, self.interest(), PollOpt::edge())?;
                 Some(Box::new(buf))
             }
         };
