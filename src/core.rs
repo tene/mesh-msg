@@ -2,7 +2,7 @@ use mio::net::{TcpListener, TcpStream};
 use mio::{Evented, Events, Poll, PollOpt, Ready, Token};
 use mio_extras::channel::{channel, Receiver, Sender};
 
-use bytes::Buf;
+use bytes::{Buf, Bytes};
 use slab::Slab;
 
 use failure::Error;
@@ -11,7 +11,9 @@ use std::io;
 use std::io::Result as IOResult;
 use std::time::Duration;
 
-use crate::{Frame, FramedStream};
+use crate::{App, FramedStream};
+
+pub struct Context;
 
 enum ControlMsg {
     WriteFrame(usize, Box<Buf + Send>),
@@ -93,7 +95,7 @@ pub enum FrameEvent {
     },
     Closed(usize),
     ReadError(usize, Error),
-    ReceivedFrames(usize, Vec<Frame>),
+    ReceivedFrames(usize, Vec<Bytes>),
 }
 
 // XXX TODO NAMING wtf should I call this??
@@ -264,13 +266,29 @@ impl Core {
         Ok(self.frame_events.split_off(0))
     }
 
-    pub fn sockets(&self) {
-        unimplemented!()
-    }
-
     pub fn write_handle(&self, idx: usize) -> WriteHandle {
         let sender = self.control_tx.clone();
         WriteHandle { idx, sender }
+    }
+
+    pub fn run_events<F>(&mut self, _func: F)
+    where
+        F: FnMut(&mut Context, &mut Vec<FrameEvent>),
+    {
+        unimplemented!()
+    }
+
+    pub fn run_app<A: App>(&mut self, _app: A) {
+        // XXX TODO Implement by using run_events?
+        unimplemented!()
+    }
+
+    pub fn run_frames<F>(&mut self, _func: F)
+    where
+        F: FnMut(usize, &Vec<Bytes>),
+    {
+        // XXX TODO Implement by using run_events?
+        unimplemented!()
     }
 }
 

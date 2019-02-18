@@ -17,7 +17,7 @@ fn main() -> Result<(), Error> {
             match event {
                 ReceivedFrames(_idx, frames) => {
                     for frame in frames.into_iter() {
-                        let msg = frame.buf.into_buf();
+                        let msg = frame.into_buf();
                         for (client, _) in &clients {
                             core.write_frame(*client, msg.clone());
                         }

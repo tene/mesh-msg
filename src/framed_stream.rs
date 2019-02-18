@@ -6,18 +6,6 @@ use bytes::{Buf, BufMut, Bytes, BytesMut, IntoBuf};
 use std::io::Result as IOResult;
 use std::io::{Error, ErrorKind, Read, Write};
 
-#[derive(Debug)]
-pub struct Frame {
-    pub len: usize,
-    pub buf: Bytes,
-}
-
-impl Frame {
-    pub fn new(len: usize, buf: Bytes) -> Self {
-        Self { len, buf }
-    }
-}
-
 pub trait Stream: Read + Write + Evented + Send {}
 impl<T> Stream for T where T: Read + Write + Evented + Send {}
 
@@ -117,8 +105,8 @@ impl FramedStream {
             buf.reserve(4096);
         }
     }
-    pub fn read_frames(&mut self) -> (Vec<Frame>, Option<Error>) {
-        let mut frames: Vec<Frame> = vec![];
+    pub fn read_frames(&mut self) -> (Vec<Bytes>, Option<Error>) {
+        let mut frames: Vec<Bytes> = vec![];
         let mut err: Option<Error> = None;
         'outer: loop {
             self.ensure_read_buf_capacity();
@@ -143,9 +131,8 @@ impl FramedStream {
                 let buf_msg_len = buf.len() - 2;
                 if msg_size <= buf_msg_len {
                     buf.advance(2);
-                    let frame_buf = buf.split_to(msg_size).freeze();
-                    let frame = Frame::new(msg_size, frame_buf);
-                    frames.push(frame);
+                    let frame_bytes = buf.split_to(msg_size).freeze();
+                    frames.push(frame_bytes);
                 } else {
                     break 'inner;
                 }

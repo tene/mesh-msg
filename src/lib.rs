@@ -1,8 +1,10 @@
+mod app;
 mod core;
 mod framed_stream;
 
-pub use crate::core::{Core, FrameEvent};
-pub use crate::framed_stream::{Frame, FramedStream};
+pub use crate::app::App;
+pub use crate::core::{Context, Core, FrameEvent};
+pub use crate::framed_stream::FramedStream;
 
 #[cfg(test)]
 mod tests {
