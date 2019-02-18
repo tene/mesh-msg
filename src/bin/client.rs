@@ -22,11 +22,11 @@ fn main() -> Result<(), Error> {
 
         let iface = reader.clone();
         s.spawn(move |_| loop {
-            if let Ok(frame_events) = core.poll(None) {
-                if frame_events.len() > 0 {
-                    writeln!(iface, "{:?}", frame_events).unwrap();
+            core.run_frames(|_ctx, _id, frames| {
+                if frames.len() > 0 {
+                    writeln!(iface, "{:?}", frames).unwrap();
                 }
-            }
+            }).unwrap();
         });
         while let ReadResult::Input(input) = reader.read_line().unwrap() {
             write_handle.write_frame(input.into_buf());

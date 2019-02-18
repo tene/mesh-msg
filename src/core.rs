@@ -7,13 +7,12 @@ use slab::Slab;
 
 use failure::Error;
 
+use std::collections::HashMap;
 use std::io;
 use std::io::Result as IOResult;
 use std::time::Duration;
 
 use crate::{App, FramedStream};
-
-pub struct Context;
 
 enum ControlMsg {
     WriteFrame(usize, Box<Buf + Send>),
@@ -271,24 +270,114 @@ impl Core {
         WriteHandle { idx, sender }
     }
 
-    pub fn run_events<F>(&mut self, _func: F)
-    where
-        F: FnMut(&mut Context, &mut Vec<FrameEvent>),
-    {
-        unimplemented!()
+    pub fn run_app<A: App>(&mut self, mut app: A) -> IOResult<()> {
+        let mut ctx = Context::new(self.control_tx.clone());
+        app.handle_init(&mut ctx);
+        loop {
+            let frame_events = self.poll(None)?;
+            for event in frame_events.into_iter() {
+                use FrameEvent::*;
+                match event {
+                    /*pub trait App {
+                        fn handle_init(&mut self, _ctx: &mut Context) {}
+                        fn handle_listen(&mut self, _ctx: &mut Context, _id: usize) {}
+                        fn handle_accept(&mut self, _ctx: &mut Context, _listen_socket: usize, _id: usize) {}
+                        fn handle_close(&mut self, _ctx: Context, _id: usize) {}
+                        fn handle_frames(&mut self, _ctx: &mut Context, _id: usize, _frames: &mut Vec<Bytes>) {}
+                        fn handle_shutdown(&mut self) {}
+                    */
+                    ReceivedFrames(id, frames) => {
+                        app.handle_frames(&ctx, id, frames);
+                    }
+                    Accepted {
+                        listen_socket,
+                        conn_id,
+                    } => {
+                        ctx.accepted(conn_id);
+                        app.handle_accept(&ctx, listen_socket, conn_id);
+                    }
+                    Closed(id) => {
+                        ctx.closed(id);
+                        app.handle_close(&ctx, id);
+                    }
+                    Listening(id) => {
+                        ctx.listening(id);
+                        app.handle_listen(&ctx, id);
+                    }
+                    _ => {
+                        // XX TODO
+                    }
+                }
+            }
+        }
     }
 
-    pub fn run_app<A: App>(&mut self, _app: A) {
-        // XXX TODO Implement by using run_events?
-        unimplemented!()
-    }
-
-    pub fn run_frames<F>(&mut self, _func: F)
+    pub fn run_frames<F>(&mut self, func: F) -> IOResult<()>
     where
-        F: FnMut(usize, &Vec<Bytes>),
+        F: FnMut(&Context, usize, Vec<Bytes>),
     {
-        // XXX TODO Implement by using run_events?
-        unimplemented!()
+        struct FrameApp<F2: FnMut(&Context, usize, Vec<Bytes>)>(F2);
+
+        impl<F2> App for FrameApp<F2>
+        where
+            F2: FnMut(&Context, usize, Vec<Bytes>),
+        {
+            fn handle_frames(&mut self, ctx: &Context, id: usize, frames: Vec<Bytes>) {
+                self.0(ctx, id, frames);
+            }
+        }
+        self.run_app(FrameApp(func))
+    }
+}
+
+pub struct Context {
+    connections: HashMap<usize, ConnectionDetails>,
+    listening: HashMap<usize, ListenDetails>,
+    sender: Sender<ControlMsg>,
+}
+
+impl Context {
+    fn new(sender: Sender<ControlMsg>) -> Self {
+        let connections = HashMap::new();
+        let listening = HashMap::new();
+        Self {
+            connections,
+            listening,
+            sender,
+        }
+    }
+    fn accepted(&mut self, id: usize) {
+        self.connections.insert(id, ConnectionDetails::new());
+    }
+    fn closed(&mut self, id: usize) -> Option<ConnectionDetails> {
+        self.connections.remove(&id)
+    }
+    fn listening(&mut self, id: usize) {
+        self.listening.insert(id, ListenDetails::new());
+    }
+    pub fn connection_ids<'a>(&'a self) -> impl Iterator<Item = usize> + 'a {
+        self.connections.keys().map(|id| *id)
+    }
+    pub fn write_frame<B: Buf + Send + 'static>(&self, id: usize, buf: B) {
+        self.sender
+            .send(ControlMsg::WriteFrame(id, Box::new(buf)))
+            .unwrap();
+    }
+}
+
+pub struct ConnectionDetails;
+
+impl ConnectionDetails {
+    pub fn new() -> Self {
+        ConnectionDetails
+    }
+}
+
+pub struct ListenDetails;
+
+impl ListenDetails {
+    pub fn new() -> Self {
+        ListenDetails
     }
 }
 
