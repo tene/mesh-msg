@@ -16,8 +16,8 @@ impl App for BroadcastServer {
 }
 
 fn main() -> io::Result<()> {
-    let mut core = Core::new();
+    let mut core = Core::new(BroadcastServer {});
     let _ = core.listen("127.0.0.1:13265");
 
-    core.run_app(BroadcastServer {})
+    core.run()
 }
