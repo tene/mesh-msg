@@ -2,7 +2,7 @@ use mio::net::{TcpListener, TcpStream};
 use mio::{Evented, Events, Poll, PollOpt, Ready, Token};
 use mio_extras::channel::{channel, Receiver, Sender};
 
-use bytes::{Buf, Bytes};
+use bytes::{Buf, Bytes, IntoBuf};
 use slab::Slab;
 
 use failure::Error;
@@ -193,7 +193,7 @@ impl<A: App> Core<A> {
                         if event.readiness().is_writable() {
                             let pre = stream.interest();
                             match stream.handle_write() {
-                                Ok(()) => {}
+                                Ok(_n) => {}
                                 Err(_err) => {
                                     retain = false;
                                 }
@@ -323,9 +323,12 @@ pub struct WriteHandle {
 }
 
 impl WriteHandle {
-    pub fn write_frame<B: Buf + Send + 'static>(&mut self, buf: B) {
+    pub fn write_frame<B: IntoBuf + Send + 'static>(&mut self, buf: B)
+    where
+        B::Buf: Send,
+    {
         self.sender
-            .send(ControlMsg::WriteFrame(self.idx, Box::new(buf)))
+            .send(ControlMsg::WriteFrame(self.idx, Box::new(buf.into_buf())))
             .unwrap();
     }
 }

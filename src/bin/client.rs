@@ -1,4 +1,3 @@
-use bytes::IntoBuf;
 use failure::Error;
 use mesh_msg::new_simple;
 
@@ -24,14 +23,14 @@ fn main() -> Result<(), Error> {
         let idx = core.connect("127.0.0.1:13265").unwrap();
         let mut write_handle = core.write_handle(idx);
 
-        write_handle.write_frame("Hello".into_buf());
-        write_handle.write_frame("World".into_buf());
+        write_handle.write_frame("Hello");
+        write_handle.write_frame("World");
 
         s.spawn(move |_| {
             core.run().unwrap();
         });
         while let ReadResult::Input(input) = reader.read_line().unwrap() {
-            write_handle.write_frame(input.into_buf());
+            write_handle.write_frame(input);
         }
         // XXX TODO Need a way to close the core, to terminate the thread
     })

@@ -1,7 +1,6 @@
 use mio::{Evented, Poll, PollOpt, Ready, Token};
 
-use bytes::buf::Chain;
-use bytes::{Buf, BufMut, Bytes, BytesMut, IntoBuf};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use std::io::Result as IOResult;
 use std::io::{Error, ErrorKind, Read, Write};
@@ -50,8 +49,7 @@ impl Stream {
 pub struct FramedStream {
     stream: Box<Stream>,
     read_buf: BytesMut,
-    write_buf: Option<Box<Buf + Send>>,
-    size_buf: BytesMut,
+    write_buf: BytesMut,
     interest: Ready,
 }
 
@@ -76,15 +74,13 @@ impl Evented for FramedStream {
 impl FramedStream {
     pub fn new<S: Stream + 'static>(stream: S) -> Self {
         let interest = Ready::readable();
-        let write_buf = None;
+        let write_buf = BytesMut::with_capacity(8192);
         let stream = Box::new(stream);
         let read_buf = BytesMut::with_capacity(8192);
-        let size_buf = BytesMut::with_capacity(8192);
         FramedStream {
             stream,
             read_buf,
             write_buf,
-            size_buf,
             interest,
         }
     }
@@ -152,61 +148,53 @@ impl FramedStream {
         if msg_size > std::u16::MAX as usize {
             return Err(Error::new(ErrorKind::InvalidData, "Message too big"));
         }
-        self.size_buf.put_u16_le(msg_size as u16);
+        if self.write_buf.capacity() < msg_size + 2 {
+            self.write_buf.reserve(msg_size + 2);
+        }
+        self.write_buf.put_u16_le(msg_size as u16);
+        self.write_buf.put(buf);
 
-        let msg_size_buf = self.size_buf.split_to(2).freeze().into_buf();
-
-        let buf = Chain::new(msg_size_buf, buf);
-
-        self.write_buf = match self.write_buf.take() {
-            Some(pending) => Some(Box::new(pending.chain(buf))),
-            None => {
-                self.interest.insert(Ready::writable());
-                poll.reregister(self, token, self.interest(), PollOpt::edge())?;
-                Some(Box::new(buf))
-            }
-        };
+        if !self.interest.is_writable() {
+            self.interest.insert(Ready::writable());
+            poll.reregister(self, token, self.interest(), PollOpt::edge())?;
+        }
         Ok(())
     }
 
-    pub fn handle_write(&mut self) -> IOResult<()> {
+    pub fn handle_write(&mut self) -> IOResult<usize> {
         // XXX TODO use vectored writes?
         // Not quite sure how to populate the array of iovecs
         // https://docs.rs/mio/0.6.16/mio/net/struct.TcpStream.html#method.read_bufs
         // https://docs.rs/bytes/0.4.11/bytes/trait.Buf.html#method.bytes_vec
-        match self.write_buf.take() {
-            None => {}
-            Some(buf) => {
-                let mut buf: Bytes = buf.collect();
 
-                loop {
-                    if buf.is_empty() {
+        let mut count = 0;
+        loop {
+            if self.write_buf.is_empty() {
+                break;
+            }
+            match self.stream.write(&self.write_buf) {
+                Ok(0) => {
+                    // XXX TODO When precisely will this happen?
+                    break;
+                }
+                Err(e) => {
+                    if e.kind() == ErrorKind::WouldBlock {
                         break;
                     }
-                    match self.stream.write(&buf) {
-                        Ok(0) => {
-                            // XXX TODO When precisely will this happen?
-                            break;
-                        }
-                        Err(e) => {
-                            if e.kind() == ErrorKind::WouldBlock {
-                                break;
-                            }
-                            return Err(e);
-                        }
-                        Ok(n) => {
-                            buf.advance(n);
-                            // Successful read
-                        }
-                    }
+                    return Err(e);
                 }
-                if buf.is_empty() {
-                    self.interest.remove(Ready::writable());
-                } else {
-                    self.write_buf = Some(Box::new(buf.into_buf()));
+                Ok(n) => {
+                    self.write_buf.advance(n);
+                    count += n;
+                    // Successful read
                 }
             }
         }
-        Ok(())
+        if self.write_buf.is_empty() {
+            self.interest.remove(Ready::writable());
+        } else {
+            // Pending unhandled writes remain
+        }
+        Ok(count)
     }
 }
