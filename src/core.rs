@@ -2,7 +2,7 @@ use mio::net::{TcpListener, TcpStream};
 use mio::{Evented, Events, Poll, PollOpt, Ready, Token};
 use mio_extras::channel::{channel, Receiver, Sender};
 
-use bytes::{Buf, Bytes, IntoBuf};
+use bytes::{Buf, IntoBuf};
 use slab::Slab;
 
 use failure::Error;
@@ -331,22 +331,4 @@ impl WriteHandle {
             .send(ControlMsg::WriteFrame(self.idx, Box::new(buf.into_buf())))
             .unwrap();
     }
-}
-
-pub struct SimpleApp<F2: FnMut(&Context, usize, Vec<Bytes>)>(F2);
-
-impl<F2> App for SimpleApp<F2>
-where
-    F2: FnMut(&Context, usize, Vec<Bytes>),
-{
-    fn handle_frames(&mut self, ctx: &Context, id: usize, frames: Vec<Bytes>) {
-        self.0(ctx, id, frames);
-    }
-}
-
-pub fn new_simple<F>(func: F) -> Core<SimpleApp<F>>
-where
-    F: FnMut(&Context, usize, Vec<Bytes>),
-{
-    Core::new(SimpleApp(func))
 }

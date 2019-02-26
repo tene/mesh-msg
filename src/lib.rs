@@ -2,8 +2,8 @@ mod app;
 mod core;
 mod framed_stream;
 
-pub use crate::app::App;
-pub use crate::core::{new_simple, Context, Core, SimpleApp};
+pub use crate::app::{new_simple, App, SimpleApp, new_serde, SerdeApp, SerdeAppCore};
+pub use crate::core::{Context, Core};
 pub use crate::framed_stream::FramedStream;
 
 #[cfg(test)]
