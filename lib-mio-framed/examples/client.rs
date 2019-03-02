@@ -1,5 +1,5 @@
 use failure::Error;
-use mio_framed::new_simple;
+use mesh_msg::new_simple;
 
 use crossbeam::thread;
 use linefeed::{Interface, ReadResult};

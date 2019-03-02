@@ -1,5 +1,5 @@
 use bytes::{Bytes, IntoBuf};
-use mio_framed::{App, Context, Core};
+use mesh_msg::{App, Context, Core};
 use std::io;
 
 struct BroadcastServer {}
